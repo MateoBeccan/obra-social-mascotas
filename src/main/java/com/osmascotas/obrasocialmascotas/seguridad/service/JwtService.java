@@ -22,6 +22,7 @@ public class JwtService {
 
     private static final String AUTHORITIES_CLAIM = "authorities";
     private static final String TOKEN_TYPE = "access";
+    private static final String ROLE_PREFIX = "ROLE_";
 
     private final String issuer;
     private final Duration expiration;
@@ -45,6 +46,7 @@ public class JwtService {
         Instant expiraEn = emitidoEn.plus(expiration);
         List<String> authorities = authentication.getAuthorities().stream()
                 .map(GrantedAuthority::getAuthority)
+                .filter(authority -> authority.startsWith(ROLE_PREFIX))
                 .toList();
 
         return Jwts.builder()

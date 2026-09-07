@@ -166,6 +166,34 @@ class AuthControllerIntegrationTest {
     }
 
     @Test
+    void loginGeneraTokenConSubjectYAuthorityDelRolParaCadaTipoDeUsuario() throws Exception {
+        for (RolUsuario rolUsuario : RolUsuario.values()) {
+            String identificadorAcceso = rolUsuario.name().toLowerCase() + "@osmascotas.com";
+            guardarUsuario(
+                    identificadorAcceso,
+                    CONTRASENA,
+                    rolUsuario,
+                    EstadoUsuario.ACTIVO,
+                    rolUsuario.name().toLowerCase() + "@test.local"
+            );
+
+            MvcResult result = mockMvc.perform(post("/api/auth/login")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(loginRequest(identificadorAcceso, CONTRASENA))))
+                    .andExpect(status().isOk())
+                    .andReturn();
+
+            String accessToken = objectMapper
+                    .readTree(result.getResponse().getContentAsString())
+                    .get("accessToken")
+                    .asText();
+
+            assertThat(jwtService.extraerSubject(accessToken)).isEqualTo(identificadorAcceso);
+            assertThat(jwtService.extraerAuthorities(accessToken)).containsExactly("ROLE_" + rolUsuario.name());
+        }
+    }
+
+    @Test
     void endpointProtegidoRechazaRequestSinBearerToken() throws Exception {
         mockMvc.perform(get("/actuator/health"))
                 .andExpect(status().isUnauthorized());
@@ -241,6 +269,33 @@ class AuthControllerIntegrationTest {
     }
 
     @Test
+    void cambiarContrasenaSiguePermitidoParaCualquierRolAutenticado() throws Exception {
+        for (RolUsuario rolUsuario : RolUsuario.values()) {
+            String identificadorAcceso = rolUsuario.name().toLowerCase() + "@osmascotas.com";
+            guardarUsuario(
+                    identificadorAcceso,
+                    CONTRASENA,
+                    rolUsuario,
+                    EstadoUsuario.ACTIVO,
+                    rolUsuario.name().toLowerCase() + "@test.local"
+            );
+            String token = tokenValido(identificadorAcceso, rolUsuario);
+
+            mockMvc.perform(post("/api/auth/change-password")
+                            .header("Authorization", "Bearer " + token)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(cambiarContrasenaRequest(
+                                    CONTRASENA,
+                                    CONTRASENA_NUEVA
+                            ))))
+                    .andExpect(status().isNoContent());
+
+            assertThat(passwordEncoder.matches(CONTRASENA_NUEVA, buscarUsuario(identificadorAcceso).getContrasenaHash()))
+                    .isTrue();
+        }
+    }
+
+    @Test
     void cambiarContrasenaConIdentidadAutenticadaInexistenteDevuelveUnauthorizedControlado() throws Exception {
         String token = tokenValido("inexistente@osmascotas.com");
 
@@ -272,6 +327,18 @@ class AuthControllerIntegrationTest {
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.mensaje").value(MENSAJE_RECUPERACION))
                 .andExpect(cookie().doesNotExist("JSESSIONID"));
+    }
+
+    @Test
+    void resetPasswordSigueSiendoPublicoSinBearerToken() throws Exception {
+        mockMvc.perform(post("/api/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(resetPasswordRequest(
+                                "token-inexistente",
+                                CONTRASENA_RESTABLECIDA
+                        ))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.mensaje").value(MENSAJE_TOKEN_INVALIDO));
     }
 
     @Test
@@ -594,12 +661,28 @@ class AuthControllerIntegrationTest {
             RolUsuario rolUsuario,
             EstadoUsuario estadoUsuario
     ) {
+        return guardarUsuario(
+                identificadorAcceso,
+                contrasena,
+                rolUsuario,
+                estadoUsuario,
+                EMAIL_RECUPERACION
+        );
+    }
+
+    private Usuario guardarUsuario(
+            String identificadorAcceso,
+            String contrasena,
+            RolUsuario rolUsuario,
+            EstadoUsuario estadoUsuario,
+            String emailRecuperacion
+    ) {
         Usuario usuario = new Usuario(
                 identificadorAcceso,
                 passwordEncoder.encode(contrasena),
                 rolUsuario,
                 estadoUsuario,
-                EMAIL_RECUPERACION
+                emailRecuperacion
         );
 
         return usuarioRepository.save(usuario);
@@ -610,10 +693,14 @@ class AuthControllerIntegrationTest {
     }
 
     private String tokenValido(String identificadorAcceso) {
+        return tokenValido(identificadorAcceso, RolUsuario.CLIENTE);
+    }
+
+    private String tokenValido(String identificadorAcceso, RolUsuario rolUsuario) {
         return jwtService.generarAccessToken(UsernamePasswordAuthenticationToken.authenticated(
                 identificadorAcceso,
                 null,
-                List.of(new SimpleGrantedAuthority("ROLE_CLIENTE"))
+                List.of(new SimpleGrantedAuthority("ROLE_" + rolUsuario.name()))
         ));
     }
 
