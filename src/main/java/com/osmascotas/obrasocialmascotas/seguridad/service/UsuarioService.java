@@ -1,6 +1,5 @@
 package com.osmascotas.obrasocialmascotas.seguridad.service;
 
-import com.osmascotas.obrasocialmascotas.seguridad.domain.EstadoUsuario;
 import com.osmascotas.obrasocialmascotas.seguridad.domain.Usuario;
 import com.osmascotas.obrasocialmascotas.seguridad.repository.UsuarioRepository;
 import org.springframework.stereotype.Service;
@@ -28,16 +27,6 @@ public class UsuarioService {
     public boolean existeIdentificadorAcceso(String identificadorAcceso) {
         Objects.requireNonNull(identificadorAcceso, "El identificador de acceso es obligatorio.");
         return usuarioRepository.existeIdentificadorAcceso(identificadorAcceso);
-    }
-
-    @Transactional
-    public Usuario cambiarEstado(Long usuarioId, EstadoUsuario nuevoEstado) {
-        Objects.requireNonNull(usuarioId, "El id de usuario es obligatorio.");
-        Objects.requireNonNull(nuevoEstado, "El estado de usuario es obligatorio.");
-
-        Usuario usuario = obtenerUsuario(usuarioId);
-        usuario.cambiarEstado(nuevoEstado);
-        return usuario;
     }
 
     @Transactional

@@ -101,7 +101,28 @@ public class Usuario {
         this.contrasenaHash = nuevaContrasenaHash;
     }
 
-    public void cambiarEstado(EstadoUsuario nuevoEstado) {
-        this.estadoUsuario = nuevoEstado;
+    public void aplicarOperacionEstado(OperacionEstadoUsuario operacion) {
+        if (estadoUsuario == EstadoUsuario.INACTIVO && operacion == OperacionEstadoUsuario.HABILITAR) {
+            estadoUsuario = EstadoUsuario.ACTIVO;
+            return;
+        }
+
+        if (estadoUsuario == EstadoUsuario.ACTIVO && operacion == OperacionEstadoUsuario.BLOQUEAR) {
+            estadoUsuario = EstadoUsuario.BLOQUEADO;
+            return;
+        }
+
+        if (estadoUsuario == EstadoUsuario.BLOQUEADO && operacion == OperacionEstadoUsuario.DESBLOQUEAR) {
+            estadoUsuario = EstadoUsuario.ACTIVO;
+            return;
+        }
+
+        if ((estadoUsuario == EstadoUsuario.ACTIVO || estadoUsuario == EstadoUsuario.BLOQUEADO)
+                && operacion == OperacionEstadoUsuario.INACTIVAR) {
+            estadoUsuario = EstadoUsuario.INACTIVO;
+            return;
+        }
+
+        throw new TransicionEstadoUsuarioInvalidaException(estadoUsuario, operacion);
     }
 }
