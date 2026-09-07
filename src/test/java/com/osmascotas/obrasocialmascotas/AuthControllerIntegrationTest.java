@@ -21,6 +21,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -38,6 +39,7 @@ import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.not;
@@ -96,6 +98,9 @@ class AuthControllerIntegrationTest {
 
     @Autowired
     private Flyway flyway;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @Autowired
     private RecuperacionContrasenaNotifier recuperacionContrasenaNotifier;
@@ -625,10 +630,35 @@ class AuthControllerIntegrationTest {
     }
 
     @Test
-    void flywayTieneAplicadaLaMigracionV002() {
-        assertThat(flyway.info().current().getVersion().getVersion()).isGreaterThanOrEqualTo("002");
+    void flywayTieneAplicadaLaMigracionV003() {
+        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("003");
         assertThat(flyway.info().applied())
-                .anySatisfy(migration -> assertThat(migration.getVersion().getVersion()).isEqualTo("002"));
+                .anySatisfy(migration -> assertThat(migration.getVersion().getVersion()).isEqualTo("003"));
+    }
+
+    @Test
+    void migracionV003CreaRegistroAuditoriaConConstraintsEIndicesEsperados() {
+        assertThat(existeTabla("registro_auditoria")).isTrue();
+        assertThat(constraintsDeTabla("registro_auditoria"))
+                .contains(
+                        "pk_registro_auditoria",
+                        "fk_registro_auditoria_usuario_responsable",
+                        "ck_registro_auditoria_origen",
+                        "ck_registro_auditoria_origen_usuario",
+                        "ck_registro_auditoria_operacion_no_vacia",
+                        "ck_registro_auditoria_entidad_afectada_no_vacia",
+                        "ck_registro_auditoria_identificador_afectado_no_vacio",
+                        "ck_registro_auditoria_estado_anterior_no_vacio",
+                        "ck_registro_auditoria_estado_nuevo_no_vacio",
+                        "ck_registro_auditoria_detalle_cambio_no_vacio",
+                        "ck_registro_auditoria_motivo_no_vacio"
+                );
+        assertThat(indicesDeTabla("registro_auditoria"))
+                .contains(
+                        "ix_registro_auditoria_usuario_responsable",
+                        "ix_registro_auditoria_fecha_hora",
+                        "ix_registro_auditoria_entidad_registro"
+                );
     }
 
     @Test
@@ -770,6 +800,37 @@ class AuthControllerIntegrationTest {
         } catch (NoSuchAlgorithmException ex) {
             throw new IllegalStateException(ex);
         }
+    }
+
+    private boolean existeTabla(String tabla) {
+        Integer cantidad = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name = ?
+                """, Integer.class, tabla);
+
+        return cantidad != null && cantidad > 0;
+    }
+
+    private Set<String> constraintsDeTabla(String tabla) {
+        return Set.copyOf(jdbcTemplate.queryForList("""
+                SELECT c.conname
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                WHERE n.nspname = 'public'
+                  AND t.relname = ?
+                """, String.class, tabla));
+    }
+
+    private Set<String> indicesDeTabla(String tabla) {
+        return Set.copyOf(jdbcTemplate.queryForList("""
+                SELECT indexname
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND tablename = ?
+                """, String.class, tabla));
     }
 
     @TestConfiguration
