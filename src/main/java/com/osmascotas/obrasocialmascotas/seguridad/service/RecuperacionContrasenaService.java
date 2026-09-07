@@ -5,6 +5,7 @@ import com.osmascotas.obrasocialmascotas.seguridad.domain.Usuario;
 import com.osmascotas.obrasocialmascotas.seguridad.repository.RecuperacionContrasenaTokenRepository;
 import com.osmascotas.obrasocialmascotas.seguridad.repository.UsuarioRepository;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,6 +29,7 @@ public class RecuperacionContrasenaService {
     private final UsuarioRepository usuarioRepository;
     private final RecuperacionContrasenaTokenRepository tokenRepository;
     private final RecuperacionContrasenaNotifier notifier;
+    private final PasswordEncoder passwordEncoder;
     private final SecureRandom secureRandom;
     private final Clock clock;
     private final Duration expiration;
@@ -36,12 +38,14 @@ public class RecuperacionContrasenaService {
             UsuarioRepository usuarioRepository,
             RecuperacionContrasenaTokenRepository tokenRepository,
             RecuperacionContrasenaNotifier notifier,
+            PasswordEncoder passwordEncoder,
             Clock clock,
             @Value("${app.security.password-recovery.expiration}") Duration expiration
     ) {
         this.usuarioRepository = usuarioRepository;
         this.tokenRepository = tokenRepository;
         this.notifier = notifier;
+        this.passwordEncoder = passwordEncoder;
         this.clock = clock;
         this.expiration = expiration;
         this.secureRandom = new SecureRandom();
@@ -53,6 +57,23 @@ public class RecuperacionContrasenaService {
 
         usuarioRepository.buscarPorIdentificadorAcceso(identificadorAcceso)
                 .ifPresent(this::crearTokenYNotificar);
+    }
+
+    @Transactional
+    public void restablecerContrasena(String tokenOriginal, String nuevaContrasena) {
+        Objects.requireNonNull(tokenOriginal, "El token de recuperacion es obligatorio.");
+        Objects.requireNonNull(nuevaContrasena, "La nueva contrasena es obligatoria.");
+
+        String tokenHash = calcularSha256Hex(tokenOriginal);
+        RecuperacionContrasenaToken token = tokenRepository.buscarPorTokenHashParaActualizar(tokenHash)
+                .orElseThrow(TokenRecuperacionInvalidoException::new);
+
+        Instant instanteActual = clock.instant();
+        validarTokenVigente(token, instanteActual);
+
+        Usuario usuario = token.getUsuario();
+        usuario.cambiarContrasenaHash(passwordEncoder.encode(nuevaContrasena));
+        token.marcarUsado(instanteActual);
     }
 
     private void crearTokenYNotificar(Usuario usuario) {
@@ -89,6 +110,14 @@ public class RecuperacionContrasenaService {
             return HexFormat.of().formatHex(hash);
         } catch (NoSuchAlgorithmException ex) {
             throw new IllegalStateException("SHA-256 no esta disponible.", ex);
+        }
+    }
+
+    private void validarTokenVigente(RecuperacionContrasenaToken token, Instant instanteActual) {
+        if (token.getFechaUso() != null
+                || token.getFechaInvalidacion() != null
+                || !instanteActual.isBefore(token.getFechaExpiracion())) {
+            throw new TokenRecuperacionInvalidoException();
         }
     }
 }

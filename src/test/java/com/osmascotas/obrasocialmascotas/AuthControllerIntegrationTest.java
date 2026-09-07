@@ -9,6 +9,7 @@ import com.osmascotas.obrasocialmascotas.seguridad.repository.RecuperacionContra
 import com.osmascotas.obrasocialmascotas.seguridad.repository.UsuarioRepository;
 import com.osmascotas.obrasocialmascotas.seguridad.service.JwtService;
 import com.osmascotas.obrasocialmascotas.seguridad.service.RecuperacionContrasenaNotifier;
+import jakarta.persistence.LockModeType;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -28,6 +30,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.nio.charset.StandardCharsets;
+import java.lang.reflect.Method;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
@@ -65,10 +68,13 @@ class AuthControllerIntegrationTest {
     private static final String IDENTIFICADOR_ACCESO = "cliente@osmascotas.com";
     private static final String CONTRASENA = "Password123!";
     private static final String CONTRASENA_NUEVA = "NuevaPassword123!";
+    private static final String CONTRASENA_RESTABLECIDA = "Restablecida123!";
     private static final String EMAIL_RECUPERACION = "cliente@test.local";
     private static final String TOKEN_HASH = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    private static final String TOKEN_ORIGINAL_PRUEBA = "token-original-para-prueba";
     private static final String MENSAJE_RECUPERACION =
             "Si la cuenta existe, se enviaron instrucciones de recuperacion.";
+    private static final String MENSAJE_TOKEN_INVALIDO = "Token de recuperacion invalido o expirado";
 
     @Autowired
     private MockMvc mockMvc;
@@ -372,6 +378,186 @@ class AuthControllerIntegrationTest {
     }
 
     @Test
+    void resetPasswordEsPublicoYConTokenValidoDevuelveNoContent() throws Exception {
+        guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.ACTIVO);
+        String tokenOriginal = solicitarRecuperacionYCapturarToken(IDENTIFICADOR_ACCESO);
+
+        mockMvc.perform(post("/api/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(resetPasswordRequest(
+                                tokenOriginal,
+                                CONTRASENA_RESTABLECIDA
+                        ))))
+                .andExpect(status().isNoContent())
+                .andExpect(cookie().doesNotExist("JSESSIONID"))
+                .andExpect(content().string(""));
+    }
+
+    @Test
+    void resetPasswordConTokenValidoCambiaHashYMarcaTokenUsado() throws Exception {
+        Usuario usuario = guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.ACTIVO);
+        String hashOriginal = usuario.getContrasenaHash();
+        String tokenOriginal = solicitarRecuperacionYCapturarToken(IDENTIFICADOR_ACCESO);
+
+        mockMvc.perform(post("/api/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(resetPasswordRequest(
+                                tokenOriginal,
+                                CONTRASENA_RESTABLECIDA
+                        ))))
+                .andExpect(status().isNoContent());
+
+        Usuario usuarioActualizado = buscarUsuario(IDENTIFICADOR_ACCESO);
+        RecuperacionContrasenaToken tokenUsado = recuperacionContrasenaTokenRepository.findAll().getFirst();
+
+        assertThat(usuarioActualizado.getId()).isEqualTo(usuario.getId());
+        assertThat(usuarioActualizado.getContrasenaHash()).isNotEqualTo(hashOriginal);
+        assertThat(passwordEncoder.matches(CONTRASENA_RESTABLECIDA, usuarioActualizado.getContrasenaHash())).isTrue();
+        assertThat(passwordEncoder.matches(CONTRASENA, usuarioActualizado.getContrasenaHash())).isFalse();
+        assertThat(usuarioActualizado.getEstadoUsuario()).isEqualTo(EstadoUsuario.ACTIVO);
+        assertThat(usuarioActualizado.getRolUsuario()).isEqualTo(RolUsuario.CLIENTE);
+        assertThat(usuarioActualizado.getEmailRecuperacion()).isEqualTo(EMAIL_RECUPERACION);
+        assertThat(tokenUsado.getFechaUso()).isNotNull();
+        assertThat(tokenUsado.getFechaInvalidacion()).isNull();
+    }
+
+    @Test
+    void resetPasswordConMismoTokenPorSegundaVezDevuelveBadRequestYNoVuelveAModificarContrasena() throws Exception {
+        guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.ACTIVO);
+        String tokenOriginal = solicitarRecuperacionYCapturarToken(IDENTIFICADOR_ACCESO);
+
+        mockMvc.perform(post("/api/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(resetPasswordRequest(
+                                tokenOriginal,
+                                CONTRASENA_RESTABLECIDA
+                        ))))
+                .andExpect(status().isNoContent());
+
+        String hashLuegoDelPrimerUso = buscarUsuario(IDENTIFICADOR_ACCESO).getContrasenaHash();
+
+        mockMvc.perform(post("/api/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(resetPasswordRequest(
+                                tokenOriginal,
+                                "OtraContrasena123!"
+                        ))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.mensaje").value(MENSAJE_TOKEN_INVALIDO));
+
+        String hashLuegoDelSegundoUso = buscarUsuario(IDENTIFICADOR_ACCESO).getContrasenaHash();
+        assertThat(hashLuegoDelSegundoUso).isEqualTo(hashLuegoDelPrimerUso);
+        assertThat(passwordEncoder.matches("OtraContrasena123!", hashLuegoDelSegundoUso)).isFalse();
+    }
+
+    @Test
+    void resetPasswordConTokenInexistenteDevuelveErrorGenericoSinExponerToken() throws Exception {
+        String tokenOriginal = "token-inexistente";
+        String tokenHash = sha256Hex(tokenOriginal);
+
+        MvcResult result = mockMvc.perform(post("/api/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(resetPasswordRequest(
+                                tokenOriginal,
+                                CONTRASENA_RESTABLECIDA
+                        ))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.mensaje").value(MENSAJE_TOKEN_INVALIDO))
+                .andReturn();
+
+        assertThat(result.getResponse().getContentAsString())
+                .doesNotContain(tokenOriginal)
+                .doesNotContain(tokenHash);
+    }
+
+    @Test
+    void resetPasswordConTokenExpiradoDevuelveErrorGenericoYNoModificaContrasenaNiToken() throws Exception {
+        Usuario usuario = guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.ACTIVO);
+        String hashOriginal = usuario.getContrasenaHash();
+        RecuperacionContrasenaToken token = guardarToken(
+                usuario,
+                TOKEN_ORIGINAL_PRUEBA,
+                Instant.parse("2026-09-05T12:00:00Z"),
+                Instant.parse("2026-09-05T12:15:00Z")
+        );
+
+        mockMvc.perform(post("/api/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(resetPasswordRequest(
+                                TOKEN_ORIGINAL_PRUEBA,
+                                CONTRASENA_RESTABLECIDA
+                        ))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.mensaje").value(MENSAJE_TOKEN_INVALIDO));
+
+        RecuperacionContrasenaToken tokenLuegoDelIntento = recuperacionContrasenaTokenRepository
+                .findById(token.getId())
+                .orElseThrow();
+        assertThat(buscarUsuario(IDENTIFICADOR_ACCESO).getContrasenaHash()).isEqualTo(hashOriginal);
+        assertThat(tokenLuegoDelIntento.getFechaUso()).isNull();
+        assertThat(tokenLuegoDelIntento.getFechaInvalidacion()).isNull();
+    }
+
+    @Test
+    void resetPasswordConTokenInvalidadoDevuelveMismoErrorGenerico() throws Exception {
+        Usuario usuario = guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.ACTIVO);
+        RecuperacionContrasenaToken token = guardarTokenVigente(usuario, TOKEN_ORIGINAL_PRUEBA);
+        token.invalidar(Instant.now());
+        recuperacionContrasenaTokenRepository.saveAndFlush(token);
+
+        mockMvc.perform(post("/api/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(resetPasswordRequest(
+                                TOKEN_ORIGINAL_PRUEBA,
+                                CONTRASENA_RESTABLECIDA
+                        ))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.mensaje").value(MENSAJE_TOKEN_INVALIDO));
+
+        assertThat(buscarUsuario(IDENTIFICADOR_ACCESO).getContrasenaHash()).isEqualTo(usuario.getContrasenaHash());
+    }
+
+    @Test
+    void forgotPasswordSeguidoDeResetPasswordPermiteLoginConNuevaContrasenaYRechazaAnterior() throws Exception {
+        guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.ACTIVO);
+        String tokenOriginal = solicitarRecuperacionYCapturarToken(IDENTIFICADOR_ACCESO);
+
+        mockMvc.perform(post("/api/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(resetPasswordRequest(
+                                tokenOriginal,
+                                CONTRASENA_RESTABLECIDA
+                        ))))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(loginRequest(
+                                IDENTIFICADOR_ACCESO,
+                                CONTRASENA_RESTABLECIDA
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken", not(nullValue())));
+
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(loginRequest(IDENTIFICADOR_ACCESO, CONTRASENA))))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.mensaje").value("Credenciales invalidas"));
+    }
+
+    @Test
+    void buscarPorTokenHashParaActualizarUsaBloqueoPesimista() throws Exception {
+        Method method = RecuperacionContrasenaTokenRepository.class
+                .getMethod("buscarPorTokenHashParaActualizar", String.class);
+
+        Lock lock = method.getAnnotation(Lock.class);
+
+        assertThat(lock).isNotNull();
+        assertThat(lock.value()).isEqualTo(LockModeType.PESSIMISTIC_WRITE);
+    }
+
+    @Test
     void flywayTieneAplicadaLaMigracionV002() {
         assertThat(flyway.info().current().getVersion().getVersion()).isGreaterThanOrEqualTo("002");
         assertThat(flyway.info().applied())
@@ -449,6 +635,45 @@ class AuthControllerIntegrationTest {
         return Map.of(
                 "identificadorAcceso", identificadorAcceso
         );
+    }
+
+    private Map<String, String> resetPasswordRequest(String token, String nuevaContrasena) {
+        return Map.of(
+                "token", token,
+                "nuevaContrasena", nuevaContrasena
+        );
+    }
+
+    private String solicitarRecuperacionYCapturarToken(String identificadorAcceso) throws Exception {
+        mockMvc.perform(post("/api/auth/forgot-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(forgotPasswordRequest(identificadorAcceso))))
+                .andExpect(status().isAccepted());
+
+        ArgumentCaptor<String> tokenCaptor = ArgumentCaptor.forClass(String.class);
+        verify(recuperacionContrasenaNotifier).notificar(any(), tokenCaptor.capture(), any());
+        return tokenCaptor.getValue();
+    }
+
+    private RecuperacionContrasenaToken guardarTokenVigente(Usuario usuario, String tokenOriginal) {
+        Instant fechaCreacion = Instant.now();
+        return guardarToken(usuario, tokenOriginal, fechaCreacion, fechaCreacion.plus(Duration.ofMinutes(15)));
+    }
+
+    private RecuperacionContrasenaToken guardarToken(
+            Usuario usuario,
+            String tokenOriginal,
+            Instant fechaCreacion,
+            Instant fechaExpiracion
+    ) {
+        RecuperacionContrasenaToken token = new RecuperacionContrasenaToken(
+                usuario,
+                sha256Hex(tokenOriginal),
+                fechaCreacion,
+                fechaExpiracion
+        );
+
+        return recuperacionContrasenaTokenRepository.saveAndFlush(token);
     }
 
     private String sha256Hex(String tokenOriginal) {

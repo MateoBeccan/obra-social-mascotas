@@ -6,10 +6,12 @@ import com.osmascotas.obrasocialmascotas.seguridad.dto.ForgotPasswordResponse;
 import com.osmascotas.obrasocialmascotas.seguridad.dto.LoginErrorResponse;
 import com.osmascotas.obrasocialmascotas.seguridad.dto.LoginRequest;
 import com.osmascotas.obrasocialmascotas.seguridad.dto.LoginResponse;
+import com.osmascotas.obrasocialmascotas.seguridad.dto.ResetPasswordRequest;
 import com.osmascotas.obrasocialmascotas.seguridad.service.AuthService;
 import com.osmascotas.obrasocialmascotas.seguridad.service.ContrasenaActualInvalidaException;
 import com.osmascotas.obrasocialmascotas.seguridad.service.CredencialesInvalidasException;
 import com.osmascotas.obrasocialmascotas.seguridad.service.RecuperacionContrasenaService;
+import com.osmascotas.obrasocialmascotas.seguridad.service.TokenRecuperacionInvalidoException;
 import com.osmascotas.obrasocialmascotas.seguridad.service.UsuarioAutenticadoNoEncontradoException;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -54,6 +56,12 @@ public class AuthController {
                 .body(new ForgotPasswordResponse(MENSAJE_RECUPERACION));
     }
 
+    @PostMapping("/reset-password")
+    public ResponseEntity<Void> restablecerContrasena(@Valid @RequestBody ResetPasswordRequest request) {
+        recuperacionContrasenaService.restablecerContrasena(request.token(), request.nuevaContrasena());
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/change-password")
     public ResponseEntity<Void> cambiarContrasena(
             Authentication authentication,
@@ -82,5 +90,12 @@ public class AuthController {
         return ResponseEntity
                 .status(HttpStatus.UNAUTHORIZED)
                 .body(new LoginErrorResponse("Usuario autenticado no encontrado"));
+    }
+
+    @ExceptionHandler(TokenRecuperacionInvalidoException.class)
+    public ResponseEntity<LoginErrorResponse> manejarTokenRecuperacionInvalido() {
+        return ResponseEntity
+                .badRequest()
+                .body(new LoginErrorResponse("Token de recuperacion invalido o expirado"));
     }
 }
