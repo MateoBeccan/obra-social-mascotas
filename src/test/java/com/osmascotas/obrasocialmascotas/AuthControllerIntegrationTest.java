@@ -630,10 +630,9 @@ class AuthControllerIntegrationTest {
     }
 
     @Test
-    void flywayTieneAplicadaLaMigracionV003() {
-        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("003");
+    void flywayTieneAplicadaLaMigracionV004() {
         assertThat(flyway.info().applied())
-                .anySatisfy(migration -> assertThat(migration.getVersion().getVersion()).isEqualTo("003"));
+                .anySatisfy(migration -> assertThat(migration.getVersion().getVersion()).isEqualTo("004"));
     }
 
     @Test
@@ -658,6 +657,26 @@ class AuthControllerIntegrationTest {
                         "ix_registro_auditoria_usuario_responsable",
                         "ix_registro_auditoria_fecha_hora",
                         "ix_registro_auditoria_entidad_registro"
+                );
+    }
+
+    @Test
+    void migracionV004CreaActivacionCuentaTokenConConstraintsEIndicesEsperados() {
+        assertThat(existeTabla("activacion_cuenta_token")).isTrue();
+        assertThat(constraintsDeTabla("activacion_cuenta_token"))
+                .contains(
+                        "pk_activacion_cuenta_token",
+                        "fk_activacion_cuenta_token_usuario",
+                        "uq_activacion_cuenta_token_hash",
+                        "ck_activacion_cuenta_token_hash_no_vacio",
+                        "ck_activacion_cuenta_token_expiracion",
+                        "ck_activacion_cuenta_token_fecha_uso",
+                        "ck_activacion_cuenta_token_fecha_invalidacion"
+                );
+        assertThat(indicesDeTabla("activacion_cuenta_token"))
+                .contains(
+                        "ix_activacion_cuenta_token_usuario",
+                        "ux_activacion_cuenta_token_activo_usuario"
                 );
     }
 
