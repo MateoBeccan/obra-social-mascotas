@@ -1,12 +1,18 @@
 package com.osmascotas.obrasocialmascotas;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.osmascotas.obrasocialmascotas.auditoria.domain.OrigenOperacion;
+import com.osmascotas.obrasocialmascotas.auditoria.domain.RegistroAuditoria;
+import com.osmascotas.obrasocialmascotas.auditoria.repository.RegistroAuditoriaRepository;
+import com.osmascotas.obrasocialmascotas.seguridad.domain.ActivacionCuentaToken;
 import com.osmascotas.obrasocialmascotas.seguridad.domain.EstadoUsuario;
 import com.osmascotas.obrasocialmascotas.seguridad.domain.RecuperacionContrasenaToken;
 import com.osmascotas.obrasocialmascotas.seguridad.domain.RolUsuario;
 import com.osmascotas.obrasocialmascotas.seguridad.domain.Usuario;
+import com.osmascotas.obrasocialmascotas.seguridad.repository.ActivacionCuentaTokenRepository;
 import com.osmascotas.obrasocialmascotas.seguridad.repository.RecuperacionContrasenaTokenRepository;
 import com.osmascotas.obrasocialmascotas.seguridad.repository.UsuarioRepository;
+import com.osmascotas.obrasocialmascotas.seguridad.service.ActivacionCuentaService;
 import com.osmascotas.obrasocialmascotas.seguridad.service.JwtService;
 import com.osmascotas.obrasocialmascotas.seguridad.service.RecuperacionContrasenaNotifier;
 import jakarta.persistence.LockModeType;
@@ -29,13 +35,16 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.lang.reflect.Method;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -57,7 +66,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@Import({TestcontainersConfiguration.class, AuthControllerIntegrationTest.NotifierTestConfiguration.class})
+@Import({
+        TestcontainersConfiguration.class,
+        AuthControllerIntegrationTest.NotifierTestConfiguration.class,
+        AuthControllerIntegrationTest.ClockTestConfiguration.class
+})
 @AutoConfigureMockMvc
 @SpringBootTest(properties = {
         "app.security.jwt.issuer=obra-social-mascotas-test",
@@ -74,9 +87,12 @@ class AuthControllerIntegrationTest {
     private static final String EMAIL_RECUPERACION = "cliente@test.local";
     private static final String TOKEN_HASH = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     private static final String TOKEN_ORIGINAL_PRUEBA = "token-original-para-prueba";
+    private static final String TOKEN_ACTIVACION_ORIGINAL = "token-original-activacion";
+    private static final Instant FECHA_HORA = Instant.parse("2026-09-07T12:00:00Z");
     private static final String MENSAJE_RECUPERACION =
             "Si la cuenta existe, se enviaron instrucciones de recuperacion.";
     private static final String MENSAJE_TOKEN_INVALIDO = "Token de recuperacion invalido o expirado";
+    private static final String MENSAJE_TOKEN_ACTIVACION_INVALIDO = "Token de activacion invalido o expirado";
 
     @Autowired
     private MockMvc mockMvc;
@@ -89,6 +105,15 @@ class AuthControllerIntegrationTest {
 
     @Autowired
     private RecuperacionContrasenaTokenRepository recuperacionContrasenaTokenRepository;
+
+    @Autowired
+    private ActivacionCuentaTokenRepository activacionCuentaTokenRepository;
+
+    @Autowired
+    private RegistroAuditoriaRepository registroAuditoriaRepository;
+
+    @Autowired
+    private ActivacionCuentaService activacionCuentaService;
 
     @Autowired
     private PasswordEncoder passwordEncoder;
@@ -105,9 +130,14 @@ class AuthControllerIntegrationTest {
     @Autowired
     private RecuperacionContrasenaNotifier recuperacionContrasenaNotifier;
 
+    @Autowired
+    private TransactionTemplate transactionTemplate;
+
     @BeforeEach
     void setUp() {
         reset(recuperacionContrasenaNotifier);
+        registroAuditoriaRepository.deleteAll();
+        activacionCuentaTokenRepository.deleteAll();
         recuperacionContrasenaTokenRepository.deleteAll();
         usuarioRepository.deleteAll();
     }
@@ -630,6 +660,17 @@ class AuthControllerIntegrationTest {
     }
 
     @Test
+    void buscarTokenActivacionPorTokenHashParaActualizarUsaBloqueoPesimista() throws Exception {
+        Method method = ActivacionCuentaTokenRepository.class
+                .getMethod("buscarPorTokenHashParaActualizar", String.class);
+
+        Lock lock = method.getAnnotation(Lock.class);
+
+        assertThat(lock).isNotNull();
+        assertThat(lock.value()).isEqualTo(LockModeType.PESSIMISTIC_WRITE);
+    }
+
+    @Test
     void flywayTieneAplicadaLaMigracionV004() {
         assertThat(flyway.info().applied())
                 .anySatisfy(migration -> assertThat(migration.getVersion().getVersion()).isEqualTo("004"));
@@ -678,6 +719,300 @@ class AuthControllerIntegrationTest {
                         "ix_activacion_cuenta_token_usuario",
                         "ux_activacion_cuenta_token_activo_usuario"
                 );
+    }
+
+    @Test
+    void persisteYRecuperaTokenDeActivacionCuenta() {
+        Usuario usuario = guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.INACTIVO);
+        Instant fechaCreacion = Instant.parse("2026-09-05T12:00:00Z");
+        Instant fechaExpiracion = Instant.parse("2026-09-05T12:15:00Z");
+        ActivacionCuentaToken token = new ActivacionCuentaToken(
+                usuario,
+                TOKEN_HASH,
+                fechaCreacion,
+                fechaExpiracion
+        );
+
+        ActivacionCuentaToken tokenGuardado = activacionCuentaTokenRepository.saveAndFlush(token);
+
+        ActivacionCuentaToken tokenRecuperado = activacionCuentaTokenRepository
+                .findById(tokenGuardado.getId())
+                .orElseThrow();
+
+        assertThat(tokenRecuperado.getUsuario().getId()).isEqualTo(usuario.getId());
+        assertThat(tokenRecuperado.getTokenHash()).isEqualTo(TOKEN_HASH);
+        assertThat(tokenRecuperado.getFechaCreacion()).isEqualTo(fechaCreacion);
+        assertThat(tokenRecuperado.getFechaExpiracion()).isEqualTo(fechaExpiracion);
+        assertThat(tokenRecuperado.getFechaUso()).isNull();
+        assertThat(tokenRecuperado.getFechaInvalidacion()).isNull();
+    }
+
+    @Test
+    void activateAccountEsPublicoYConTokenValidoActivaCuentaSinDevolverJwt() throws Exception {
+        Usuario usuario = guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.INACTIVO);
+        String hashOriginal = usuario.getContrasenaHash();
+        ActivacionCuentaToken token = guardarTokenActivacionVigente(usuario, TOKEN_ACTIVACION_ORIGINAL);
+
+        mockMvc.perform(post("/api/auth/activate-account")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(activarCuentaRequest(
+                                TOKEN_ACTIVACION_ORIGINAL,
+                                CONTRASENA_NUEVA
+                        ))))
+                .andExpect(status().isNoContent())
+                .andExpect(cookie().doesNotExist("JSESSIONID"))
+                .andExpect(content().string(""));
+
+        Usuario usuarioActualizado = buscarUsuario(IDENTIFICADOR_ACCESO);
+        ActivacionCuentaToken tokenUsado = activacionCuentaTokenRepository.findById(token.getId()).orElseThrow();
+        RegistroAuditoria registro = registroAuditoriaRepository.findAll().getFirst();
+
+        assertThat(usuarioActualizado.getEstadoUsuario()).isEqualTo(EstadoUsuario.ACTIVO);
+        assertThat(usuarioActualizado.getContrasenaHash()).isNotEqualTo(hashOriginal);
+        assertThat(passwordEncoder.matches(CONTRASENA_NUEVA, usuarioActualizado.getContrasenaHash())).isTrue();
+        assertThat(passwordEncoder.matches(CONTRASENA, usuarioActualizado.getContrasenaHash())).isFalse();
+        assertThat(usuarioActualizado.getIdentificadorAcceso()).isEqualTo(IDENTIFICADOR_ACCESO);
+        assertThat(usuarioActualizado.getRolUsuario()).isEqualTo(RolUsuario.CLIENTE);
+        assertThat(usuarioActualizado.getEmailRecuperacion()).isEqualTo(EMAIL_RECUPERACION);
+        assertThat(tokenUsado.getFechaUso()).isEqualTo(FECHA_HORA);
+        assertThat(tokenUsado.getFechaInvalidacion()).isNull();
+        assertThat(registroAuditoriaRepository.findAll()).hasSize(1);
+        assertThat(registro.getOrigenOperacion()).isEqualTo(OrigenOperacion.SISTEMA);
+        assertThat(registro.getUsuarioResponsable()).isNull();
+        assertThat(registro.getOperacion()).isEqualTo("ACTIVAR_CUENTA");
+        assertThat(registro.getEntidadAfectada()).isEqualTo("USUARIO");
+        assertThat(registro.getIdentificadorRegistroAfectado()).isEqualTo(usuario.getId().toString());
+        assertThat(registro.getEstadoAnterior()).isEqualTo("INACTIVO");
+        assertThat(registro.getEstadoNuevo()).isEqualTo("ACTIVO");
+        assertThat(registro.getDetalleCambio()).isNull();
+        assertThat(registro.getMotivo()).isNull();
+    }
+
+    @Test
+    void activateAccountConTokenInexistenteDevuelveErrorGenericoYNoModificaNiAudita() throws Exception {
+        Usuario usuario = guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.INACTIVO);
+        String hashOriginal = usuario.getContrasenaHash();
+        String tokenOriginal = "token-inexistente-activacion";
+        String tokenHash = sha256Hex(tokenOriginal);
+
+        MvcResult result = mockMvc.perform(post("/api/auth/activate-account")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(activarCuentaRequest(tokenOriginal, CONTRASENA_NUEVA))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.mensaje").value(MENSAJE_TOKEN_ACTIVACION_INVALIDO))
+                .andReturn();
+
+        Usuario usuarioLuegoDelIntento = buscarUsuario(IDENTIFICADOR_ACCESO);
+        assertThat(usuarioLuegoDelIntento.getEstadoUsuario()).isEqualTo(EstadoUsuario.INACTIVO);
+        assertThat(usuarioLuegoDelIntento.getContrasenaHash()).isEqualTo(hashOriginal);
+        assertThat(registroAuditoriaRepository.count()).isZero();
+        assertThat(result.getResponse().getContentAsString())
+                .doesNotContain(tokenOriginal)
+                .doesNotContain(tokenHash);
+    }
+
+    @Test
+    void activateAccountConTokenUsadoDevuelveErrorGenericoYNoModifica() throws Exception {
+        Usuario usuario = guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.INACTIVO);
+        String hashOriginal = usuario.getContrasenaHash();
+        ActivacionCuentaToken token = guardarTokenActivacionVigente(usuario, TOKEN_ACTIVACION_ORIGINAL);
+        Instant fechaUsoOriginal = FECHA_HORA;
+        token.marcarUsado(fechaUsoOriginal);
+        activacionCuentaTokenRepository.saveAndFlush(token);
+
+        mockMvc.perform(post("/api/auth/activate-account")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(activarCuentaRequest(
+                                TOKEN_ACTIVACION_ORIGINAL,
+                                CONTRASENA_NUEVA
+                        ))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.mensaje").value(MENSAJE_TOKEN_ACTIVACION_INVALIDO));
+
+        ActivacionCuentaToken tokenLuegoDelIntento = activacionCuentaTokenRepository.findById(token.getId()).orElseThrow();
+        assertThat(buscarUsuario(IDENTIFICADOR_ACCESO).getContrasenaHash()).isEqualTo(hashOriginal);
+        assertThat(tokenLuegoDelIntento.getFechaUso()).isEqualTo(fechaUsoOriginal);
+        assertThat(registroAuditoriaRepository.count()).isZero();
+    }
+
+    @Test
+    void activateAccountConTokenInvalidadoDevuelveErrorGenericoYNoModifica() throws Exception {
+        Usuario usuario = guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.INACTIVO);
+        String hashOriginal = usuario.getContrasenaHash();
+        ActivacionCuentaToken token = guardarTokenActivacionVigente(usuario, TOKEN_ACTIVACION_ORIGINAL);
+        token.invalidar(FECHA_HORA);
+        activacionCuentaTokenRepository.saveAndFlush(token);
+
+        mockMvc.perform(post("/api/auth/activate-account")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(activarCuentaRequest(
+                                TOKEN_ACTIVACION_ORIGINAL,
+                                CONTRASENA_NUEVA
+                        ))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.mensaje").value(MENSAJE_TOKEN_ACTIVACION_INVALIDO));
+
+        assertThat(buscarUsuario(IDENTIFICADOR_ACCESO).getContrasenaHash()).isEqualTo(hashOriginal);
+        assertThat(buscarUsuario(IDENTIFICADOR_ACCESO).getEstadoUsuario()).isEqualTo(EstadoUsuario.INACTIVO);
+        assertThat(registroAuditoriaRepository.count()).isZero();
+    }
+
+    @Test
+    void activateAccountConTokenExpiradoDevuelveErrorGenericoYNoMarcaUso() throws Exception {
+        Usuario usuario = guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.INACTIVO);
+        String hashOriginal = usuario.getContrasenaHash();
+        ActivacionCuentaToken token = guardarTokenActivacion(
+                usuario,
+                TOKEN_ACTIVACION_ORIGINAL,
+                FECHA_HORA.minus(Duration.ofMinutes(30)),
+                FECHA_HORA.minus(Duration.ofSeconds(1))
+        );
+
+        mockMvc.perform(post("/api/auth/activate-account")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(activarCuentaRequest(
+                                TOKEN_ACTIVACION_ORIGINAL,
+                                CONTRASENA_NUEVA
+                        ))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.mensaje").value(MENSAJE_TOKEN_ACTIVACION_INVALIDO));
+
+        ActivacionCuentaToken tokenLuegoDelIntento = activacionCuentaTokenRepository.findById(token.getId()).orElseThrow();
+        assertThat(buscarUsuario(IDENTIFICADOR_ACCESO).getContrasenaHash()).isEqualTo(hashOriginal);
+        assertThat(tokenLuegoDelIntento.getFechaUso()).isNull();
+        assertThat(tokenLuegoDelIntento.getFechaInvalidacion()).isNull();
+        assertThat(registroAuditoriaRepository.count()).isZero();
+    }
+
+    @Test
+    void activateAccountConTokenEnLimiteExactoDeExpiracionDevuelveErrorGenerico() throws Exception {
+        Usuario usuario = guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.INACTIVO);
+        ActivacionCuentaToken token = guardarTokenActivacion(
+                usuario,
+                TOKEN_ACTIVACION_ORIGINAL,
+                FECHA_HORA.minus(Duration.ofMinutes(15)),
+                FECHA_HORA
+        );
+
+        mockMvc.perform(post("/api/auth/activate-account")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(activarCuentaRequest(
+                                TOKEN_ACTIVACION_ORIGINAL,
+                                CONTRASENA_NUEVA
+                        ))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.mensaje").value(MENSAJE_TOKEN_ACTIVACION_INVALIDO));
+
+        assertThat(activacionCuentaTokenRepository.findById(token.getId()).orElseThrow().getFechaUso()).isNull();
+        assertThat(buscarUsuario(IDENTIFICADOR_ACCESO).getEstadoUsuario()).isEqualTo(EstadoUsuario.INACTIVO);
+        assertThat(registroAuditoriaRepository.count()).isZero();
+    }
+
+    @Test
+    void activateAccountConUsuarioActivoDevuelveErrorGenericoYNoConsumeToken() throws Exception {
+        assertActivacionRechazadaPorEstadoUsuario(EstadoUsuario.ACTIVO);
+    }
+
+    @Test
+    void activateAccountConUsuarioBloqueadoDevuelveErrorGenericoYNoConsumeToken() throws Exception {
+        assertActivacionRechazadaPorEstadoUsuario(EstadoUsuario.BLOQUEADO);
+    }
+
+    @Test
+    void activateAccountConMismoTokenPorSegundaVezDevuelveBadRequestYNoVuelveAModificar() throws Exception {
+        Usuario usuario = guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.INACTIVO);
+        guardarTokenActivacionVigente(usuario, TOKEN_ACTIVACION_ORIGINAL);
+
+        mockMvc.perform(post("/api/auth/activate-account")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(activarCuentaRequest(
+                                TOKEN_ACTIVACION_ORIGINAL,
+                                CONTRASENA_NUEVA
+                        ))))
+                .andExpect(status().isNoContent());
+
+        String hashLuegoDelPrimerUso = buscarUsuario(IDENTIFICADOR_ACCESO).getContrasenaHash();
+
+        mockMvc.perform(post("/api/auth/activate-account")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(activarCuentaRequest(
+                                TOKEN_ACTIVACION_ORIGINAL,
+                                "OtraContrasena123!"
+                        ))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.mensaje").value(MENSAJE_TOKEN_ACTIVACION_INVALIDO));
+
+        String hashLuegoDelSegundoUso = buscarUsuario(IDENTIFICADOR_ACCESO).getContrasenaHash();
+        assertThat(hashLuegoDelSegundoUso).isEqualTo(hashLuegoDelPrimerUso);
+        assertThat(passwordEncoder.matches("OtraContrasena123!", hashLuegoDelSegundoUso)).isFalse();
+        assertThat(registroAuditoriaRepository.findAll())
+                .filteredOn(registro -> "ACTIVAR_CUENTA".equals(registro.getOperacion()))
+                .hasSize(1);
+    }
+
+    @Test
+    void activateAccountPermiteLoginPosteriorConNuevaContrasena() throws Exception {
+        Usuario usuario = guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.INACTIVO);
+        guardarTokenActivacionVigente(usuario, TOKEN_ACTIVACION_ORIGINAL);
+
+        mockMvc.perform(post("/api/auth/activate-account")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(activarCuentaRequest(
+                                TOKEN_ACTIVACION_ORIGINAL,
+                                CONTRASENA_NUEVA
+                        ))))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(loginRequest(IDENTIFICADOR_ACCESO, CONTRASENA_NUEVA))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken", not(nullValue())));
+
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(loginRequest(IDENTIFICADOR_ACCESO, CONTRASENA))))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.mensaje").value("Credenciales invalidas"));
+    }
+
+    @Test
+    void activateAccountConRequestInvalidoDevuelveBadRequestYNoPersisteCambios() throws Exception {
+        Usuario usuario = guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.INACTIVO);
+        String hashOriginal = usuario.getContrasenaHash();
+        ActivacionCuentaToken token = guardarTokenActivacionVigente(usuario, TOKEN_ACTIVACION_ORIGINAL);
+
+        mockMvc.perform(post("/api/auth/activate-account")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(activarCuentaRequest("", ""))))
+                .andExpect(status().isBadRequest());
+
+        Usuario usuarioLuegoDelIntento = buscarUsuario(IDENTIFICADOR_ACCESO);
+        ActivacionCuentaToken tokenLuegoDelIntento = activacionCuentaTokenRepository.findById(token.getId()).orElseThrow();
+        assertThat(usuarioLuegoDelIntento.getEstadoUsuario()).isEqualTo(EstadoUsuario.INACTIVO);
+        assertThat(usuarioLuegoDelIntento.getContrasenaHash()).isEqualTo(hashOriginal);
+        assertThat(tokenLuegoDelIntento.getFechaUso()).isNull();
+        assertThat(registroAuditoriaRepository.count()).isZero();
+    }
+
+    @Test
+    void rollbackDeTransaccionExteriorRevierteActivacionTokenYAuditoria() {
+        Usuario usuario = guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, EstadoUsuario.INACTIVO);
+        String hashOriginal = usuario.getContrasenaHash();
+        ActivacionCuentaToken token = guardarTokenActivacionVigente(usuario, TOKEN_ACTIVACION_ORIGINAL);
+
+        transactionTemplate.executeWithoutResult(status -> {
+            activacionCuentaService.activarCuenta(TOKEN_ACTIVACION_ORIGINAL, CONTRASENA_NUEVA);
+            status.setRollbackOnly();
+        });
+
+        Usuario usuarioLuegoDelRollback = buscarUsuario(IDENTIFICADOR_ACCESO);
+        ActivacionCuentaToken tokenLuegoDelRollback = activacionCuentaTokenRepository.findById(token.getId()).orElseThrow();
+        assertThat(usuarioLuegoDelRollback.getEstadoUsuario()).isEqualTo(EstadoUsuario.INACTIVO);
+        assertThat(usuarioLuegoDelRollback.getContrasenaHash()).isEqualTo(hashOriginal);
+        assertThat(tokenLuegoDelRollback.getFechaUso()).isNull();
+        assertThat(registroAuditoriaRepository.count()).isZero();
     }
 
     @Test
@@ -780,6 +1115,35 @@ class AuthControllerIntegrationTest {
         );
     }
 
+    private Map<String, String> activarCuentaRequest(String token, String nuevaContrasena) {
+        return Map.of(
+                "token", token,
+                "nuevaContrasena", nuevaContrasena
+        );
+    }
+
+    private void assertActivacionRechazadaPorEstadoUsuario(EstadoUsuario estadoUsuario) throws Exception {
+        Usuario usuario = guardarUsuario(IDENTIFICADOR_ACCESO, CONTRASENA, RolUsuario.CLIENTE, estadoUsuario);
+        String hashOriginal = usuario.getContrasenaHash();
+        ActivacionCuentaToken token = guardarTokenActivacionVigente(usuario, TOKEN_ACTIVACION_ORIGINAL);
+
+        mockMvc.perform(post("/api/auth/activate-account")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(activarCuentaRequest(
+                                TOKEN_ACTIVACION_ORIGINAL,
+                                CONTRASENA_NUEVA
+                        ))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.mensaje").value(MENSAJE_TOKEN_ACTIVACION_INVALIDO));
+
+        Usuario usuarioLuegoDelIntento = buscarUsuario(IDENTIFICADOR_ACCESO);
+        ActivacionCuentaToken tokenLuegoDelIntento = activacionCuentaTokenRepository.findById(token.getId()).orElseThrow();
+        assertThat(usuarioLuegoDelIntento.getEstadoUsuario()).isEqualTo(estadoUsuario);
+        assertThat(usuarioLuegoDelIntento.getContrasenaHash()).isEqualTo(hashOriginal);
+        assertThat(tokenLuegoDelIntento.getFechaUso()).isNull();
+        assertThat(registroAuditoriaRepository.count()).isZero();
+    }
+
     private String solicitarRecuperacionYCapturarToken(String identificadorAcceso) throws Exception {
         mockMvc.perform(post("/api/auth/forgot-password")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -794,6 +1158,31 @@ class AuthControllerIntegrationTest {
     private RecuperacionContrasenaToken guardarTokenVigente(Usuario usuario, String tokenOriginal) {
         Instant fechaCreacion = Instant.now();
         return guardarToken(usuario, tokenOriginal, fechaCreacion, fechaCreacion.plus(Duration.ofMinutes(15)));
+    }
+
+    private ActivacionCuentaToken guardarTokenActivacionVigente(Usuario usuario, String tokenOriginal) {
+        return guardarTokenActivacion(
+                usuario,
+                tokenOriginal,
+                FECHA_HORA.minus(Duration.ofMinutes(1)),
+                FECHA_HORA.plus(Duration.ofMinutes(15))
+        );
+    }
+
+    private ActivacionCuentaToken guardarTokenActivacion(
+            Usuario usuario,
+            String tokenOriginal,
+            Instant fechaCreacion,
+            Instant fechaExpiracion
+    ) {
+        ActivacionCuentaToken token = new ActivacionCuentaToken(
+                usuario,
+                sha256Hex(tokenOriginal),
+                fechaCreacion,
+                fechaExpiracion
+        );
+
+        return activacionCuentaTokenRepository.saveAndFlush(token);
     }
 
     private RecuperacionContrasenaToken guardarToken(
@@ -859,6 +1248,16 @@ class AuthControllerIntegrationTest {
         @Primary
         RecuperacionContrasenaNotifier recuperacionContrasenaNotifier() {
             return mock(RecuperacionContrasenaNotifier.class);
+        }
+    }
+
+    @TestConfiguration
+    static class ClockTestConfiguration {
+
+        @Bean
+        @Primary
+        Clock fixedClock() {
+            return Clock.fixed(FECHA_HORA, ZoneOffset.UTC);
         }
     }
 }

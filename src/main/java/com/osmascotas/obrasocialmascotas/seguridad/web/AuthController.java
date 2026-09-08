@@ -1,5 +1,6 @@
 package com.osmascotas.obrasocialmascotas.seguridad.web;
 
+import com.osmascotas.obrasocialmascotas.seguridad.dto.ActivarCuentaRequest;
 import com.osmascotas.obrasocialmascotas.seguridad.dto.CambiarContrasenaRequest;
 import com.osmascotas.obrasocialmascotas.seguridad.dto.ForgotPasswordRequest;
 import com.osmascotas.obrasocialmascotas.seguridad.dto.ForgotPasswordResponse;
@@ -7,10 +8,12 @@ import com.osmascotas.obrasocialmascotas.seguridad.dto.LoginErrorResponse;
 import com.osmascotas.obrasocialmascotas.seguridad.dto.LoginRequest;
 import com.osmascotas.obrasocialmascotas.seguridad.dto.LoginResponse;
 import com.osmascotas.obrasocialmascotas.seguridad.dto.ResetPasswordRequest;
+import com.osmascotas.obrasocialmascotas.seguridad.service.ActivacionCuentaService;
 import com.osmascotas.obrasocialmascotas.seguridad.service.AuthService;
 import com.osmascotas.obrasocialmascotas.seguridad.service.ContrasenaActualInvalidaException;
 import com.osmascotas.obrasocialmascotas.seguridad.service.CredencialesInvalidasException;
 import com.osmascotas.obrasocialmascotas.seguridad.service.RecuperacionContrasenaService;
+import com.osmascotas.obrasocialmascotas.seguridad.service.TokenActivacionInvalidoException;
 import com.osmascotas.obrasocialmascotas.seguridad.service.TokenRecuperacionInvalidoException;
 import com.osmascotas.obrasocialmascotas.seguridad.service.UsuarioAutenticadoNoEncontradoException;
 import jakarta.validation.Valid;
@@ -32,13 +35,16 @@ public class AuthController {
 
     private final AuthService authService;
     private final RecuperacionContrasenaService recuperacionContrasenaService;
+    private final ActivacionCuentaService activacionCuentaService;
 
     public AuthController(
             AuthService authService,
-            RecuperacionContrasenaService recuperacionContrasenaService
+            RecuperacionContrasenaService recuperacionContrasenaService,
+            ActivacionCuentaService activacionCuentaService
     ) {
         this.authService = authService;
         this.recuperacionContrasenaService = recuperacionContrasenaService;
+        this.activacionCuentaService = activacionCuentaService;
     }
 
     @PostMapping("/login")
@@ -59,6 +65,12 @@ public class AuthController {
     @PostMapping("/reset-password")
     public ResponseEntity<Void> restablecerContrasena(@Valid @RequestBody ResetPasswordRequest request) {
         recuperacionContrasenaService.restablecerContrasena(request.token(), request.nuevaContrasena());
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/activate-account")
+    public ResponseEntity<Void> activarCuenta(@Valid @RequestBody ActivarCuentaRequest request) {
+        activacionCuentaService.activarCuenta(request.token(), request.nuevaContrasena());
         return ResponseEntity.noContent().build();
     }
 
@@ -97,5 +109,12 @@ public class AuthController {
         return ResponseEntity
                 .badRequest()
                 .body(new LoginErrorResponse("Token de recuperacion invalido o expirado"));
+    }
+
+    @ExceptionHandler(TokenActivacionInvalidoException.class)
+    public ResponseEntity<LoginErrorResponse> manejarTokenActivacionInvalido() {
+        return ResponseEntity
+                .badRequest()
+                .body(new LoginErrorResponse("Token de activacion invalido o expirado"));
     }
 }
