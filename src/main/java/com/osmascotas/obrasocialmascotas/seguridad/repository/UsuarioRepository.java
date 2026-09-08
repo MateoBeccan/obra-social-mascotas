@@ -1,6 +1,7 @@
 package com.osmascotas.obrasocialmascotas.seguridad.repository;
 
 import com.osmascotas.obrasocialmascotas.seguridad.domain.Usuario;
+import com.osmascotas.obrasocialmascotas.seguridad.domain.RolUsuario;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -10,6 +11,8 @@ import org.springframework.data.repository.query.Param;
 import java.util.Optional;
 
 public interface UsuarioRepository extends JpaRepository<Usuario, Long> {
+
+    boolean existsByRolUsuario(RolUsuario rolUsuario);
 
     @Query("""
         SELECT u
