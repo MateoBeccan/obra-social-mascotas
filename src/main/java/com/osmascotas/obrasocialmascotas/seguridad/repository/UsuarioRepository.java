@@ -31,6 +31,16 @@ public interface UsuarioRepository extends JpaRepository<Usuario, Long> {
             @Param("identificadorAcceso") String identificadorAcceso
     );
 
+    @Query("""
+        SELECT COUNT(u) > 0
+        FROM Usuario u
+        WHERE LOWER(TRIM(u.emailRecuperacion)) =
+              LOWER(TRIM(:emailRecuperacion))
+        """)
+    boolean existeEmailRecuperacion(
+            @Param("emailRecuperacion") String emailRecuperacion
+    );
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
         SELECT u
