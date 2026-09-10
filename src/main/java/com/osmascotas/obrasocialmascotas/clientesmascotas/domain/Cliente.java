@@ -1,6 +1,7 @@
 package com.osmascotas.obrasocialmascotas.clientesmascotas.domain;
 
 import com.osmascotas.obrasocialmascotas.seguridad.domain.Usuario;
+import com.osmascotas.obrasocialmascotas.seguridad.domain.RolUsuario;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -11,6 +12,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.OneToOne;
 import jakarta.persistence.Table;
+
+import java.util.Objects;
 
 @Entity
 @Table(name = "cliente")
@@ -131,6 +134,17 @@ public class Cliente {
 
     public String getDomicilio() {
         return domicilio;
+    }
+
+    public void asociarUsuario(Usuario usuario) {
+        Objects.requireNonNull(usuario, "El usuario es obligatorio.");
+        if (this.usuario != null) {
+            throw new IllegalStateException("El cliente ya posee una cuenta asociada.");
+        }
+        if (usuario.getRolUsuario() != RolUsuario.CLIENTE) {
+            throw new IllegalArgumentException("El usuario asociado debe tener rol CLIENTE.");
+        }
+        this.usuario = usuario;
     }
 
     private static String validarObligatorio(String valor, String mensaje) {

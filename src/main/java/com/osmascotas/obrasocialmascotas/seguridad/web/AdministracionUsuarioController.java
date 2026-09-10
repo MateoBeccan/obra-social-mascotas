@@ -1,11 +1,14 @@
 package com.osmascotas.obrasocialmascotas.seguridad.web;
 
+import com.osmascotas.obrasocialmascotas.clientesmascotas.service.ClienteNoEncontradoException;
 import com.osmascotas.obrasocialmascotas.seguridad.dto.CrearAdministradorRequest;
 import com.osmascotas.obrasocialmascotas.seguridad.domain.TransicionEstadoUsuarioInvalidaException;
 import com.osmascotas.obrasocialmascotas.seguridad.dto.CambiarEstadoUsuarioRequest;
+import com.osmascotas.obrasocialmascotas.seguridad.dto.CrearCuentaClienteRequest;
 import com.osmascotas.obrasocialmascotas.seguridad.dto.ErrorResponse;
 import com.osmascotas.obrasocialmascotas.seguridad.dto.UsuarioAdministracionResponse;
 import com.osmascotas.obrasocialmascotas.seguridad.service.AdministracionUsuarioService;
+import com.osmascotas.obrasocialmascotas.seguridad.service.ClienteYaTieneCuentaException;
 import com.osmascotas.obrasocialmascotas.seguridad.service.CuentaUsuarioDuplicadaException;
 import com.osmascotas.obrasocialmascotas.seguridad.service.ProvisionamientoCuentaService;
 import com.osmascotas.obrasocialmascotas.seguridad.service.UsuarioNoEncontradoException;
@@ -60,6 +63,16 @@ public class AdministracionUsuarioController {
                 .body(provisionamientoCuentaService.crearAdministrador(request));
     }
 
+    @PostMapping("/clientes/{clienteId}")
+    public ResponseEntity<UsuarioAdministracionResponse> crearCliente(
+            @PathVariable Long clienteId,
+            @Valid @RequestBody CrearCuentaClienteRequest request
+    ) {
+        return ResponseEntity
+                .status(HttpStatus.CREATED)
+                .body(provisionamientoCuentaService.crearCliente(clienteId, request));
+    }
+
     @ExceptionHandler(UsuarioNoEncontradoException.class)
     public ResponseEntity<ErrorResponse> manejarUsuarioNoEncontrado() {
         return ResponseEntity
@@ -79,5 +92,19 @@ public class AdministracionUsuarioController {
         return ResponseEntity
                 .status(HttpStatus.CONFLICT)
                 .body(new ErrorResponse("Ya existe una cuenta equivalente"));
+    }
+
+    @ExceptionHandler(ClienteNoEncontradoException.class)
+    public ResponseEntity<ErrorResponse> manejarClienteNoEncontrado() {
+        return ResponseEntity
+                .status(HttpStatus.NOT_FOUND)
+                .body(new ErrorResponse("No existe el Cliente indicado"));
+    }
+
+    @ExceptionHandler(ClienteYaTieneCuentaException.class)
+    public ResponseEntity<ErrorResponse> manejarClienteYaTieneCuenta() {
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
+                .body(new ErrorResponse("El Cliente ya posee una cuenta asociada"));
     }
 }
