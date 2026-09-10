@@ -25,4 +25,11 @@ public interface ClienteRepository extends JpaRepository<Cliente, Long> {
         WHERE c.id = :clienteId
         """)
     Optional<Cliente> buscarPorIdParaProvisionar(@Param("clienteId") Long clienteId);
+
+    @Query("""
+        SELECT c
+        FROM Cliente c
+        WHERE c.usuario.id = :usuarioId
+        """)
+    Optional<Cliente> buscarPorUsuarioId(@Param("usuarioId") Long usuarioId);
 }
