@@ -147,6 +147,16 @@ public class Cliente {
         this.usuario = usuario;
     }
 
+    public void actualizarDatosContacto(
+            String correoElectronico,
+            String telefono,
+            String domicilio
+    ) {
+        this.correoElectronico = validarOpcional(correoElectronico, "El correo electronico no puede estar vacio.");
+        this.telefono = validarOpcional(telefono, "El telefono no puede estar vacio.");
+        this.domicilio = validarOpcional(domicilio, "El domicilio no puede estar vacio.");
+    }
+
     private static String validarObligatorio(String valor, String mensaje) {
         if (valor == null || valor.isBlank()) {
             throw new IllegalArgumentException(mensaje);
