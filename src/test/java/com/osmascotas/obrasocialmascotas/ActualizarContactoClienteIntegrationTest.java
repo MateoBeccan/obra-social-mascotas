@@ -37,6 +37,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.nullValue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -269,6 +270,56 @@ class ActualizarContactoClienteIntegrationTest {
                 .andExpect(status().isUnauthorized());
 
         assertEfectosPermitidos(0, 0);
+    }
+
+    @Test
+    void actualizarContactoClienteConCampoDniNoPermitidoDevuelveBadRequestYNoModificaCliente() throws Exception {
+        Usuario usuario = guardarUsuario("cliente-dni-extra@test.local", "seguridad-dni-extra@test.local", RolUsuario.CLIENTE);
+        Cliente cliente = guardarCliente(usuario, "99990000", "Ivana", "Molina", "ivana@test.local", "4444-5555", "Calle I");
+        Map<String, Object> request = contactoRequest("ivana-nueva@test.local", "1111-2222", "Calle Nueva");
+        request.put("dni", "99999999");
+
+        mockMvc.perform(put("/api/clientes/me/contacto")
+                        .header("Authorization", "Bearer " + tokenValido(usuario))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.mensaje").value("Solicitud JSON invalida"))
+                .andExpect(jsonPath("$.id").doesNotExist());
+
+        mockMvc.perform(get("/api/clientes/me")
+                        .header("Authorization", "Bearer " + tokenValido(usuario)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(cliente.getId()))
+                .andExpect(jsonPath("$.dni").value("99990000"))
+                .andExpect(jsonPath("$.nombre").value("Ivana"))
+                .andExpect(jsonPath("$.apellido").value("Molina"))
+                .andExpect(jsonPath("$.correoElectronico").value("ivana@test.local"))
+                .andExpect(jsonPath("$.telefono").value("4444-5555"))
+                .andExpect(jsonPath("$.domicilio").value("Calle I"))
+                .andExpect(jsonPath("$.usuarioId").value(usuario.getId()));
+
+        Cliente clienteSinCambios = clienteRepository.findById(cliente.getId()).orElseThrow();
+        assertClienteIdentico(clienteSinCambios, "99990000", "Ivana", "Molina", "ivana@test.local", "4444-5555", "Calle I", usuario.getId());
+        assertEfectosPermitidos(1, 1);
+    }
+
+    @Test
+    void actualizarContactoClienteConJsonSintacticamenteInvalidoDevuelveBadRequestYNoModificaCliente() throws Exception {
+        Usuario usuario = guardarUsuario("cliente-json-invalido@test.local", "seguridad-json-invalido@test.local", RolUsuario.CLIENTE);
+        Cliente cliente = guardarCliente(usuario, "99991111", "Julieta", "Sosa", "julieta@test.local", "5555-6666", "Calle J");
+
+        mockMvc.perform(put("/api/clientes/me/contacto")
+                        .header("Authorization", "Bearer " + tokenValido(usuario))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"correoElectronico\":\"julieta-nueva@test.local\","))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.mensaje").value("Solicitud JSON invalida"))
+                .andExpect(jsonPath("$.id").doesNotExist());
+
+        Cliente clienteSinCambios = clienteRepository.findById(cliente.getId()).orElseThrow();
+        assertClienteIdentico(clienteSinCambios, "99991111", "Julieta", "Sosa", "julieta@test.local", "5555-6666", "Calle J", usuario.getId());
+        assertEfectosPermitidos(1, 1);
     }
 
     @ParameterizedTest
