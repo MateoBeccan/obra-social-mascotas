@@ -230,7 +230,7 @@ class AuthControllerIntegrationTest {
 
     @Test
     void endpointProtegidoRechazaRequestSinBearerToken() throws Exception {
-        mockMvc.perform(get("/actuator/health"))
+        mockMvc.perform(get("/actuator/info"))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -242,7 +242,7 @@ class AuthControllerIntegrationTest {
                 List.of(new SimpleGrantedAuthority("ROLE_CLIENTE"))
         ));
 
-        mockMvc.perform(get("/actuator/health")
+        mockMvc.perform(get("/actuator/info")
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk());
     }

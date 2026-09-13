@@ -57,6 +57,15 @@ services:
       exit 0;
       "
 
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: os_mascotas_mailpit
+
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
 volumes:
   postgres_data:
   minio_data:
