@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface TitularidadMascotaRepository extends JpaRepository<TitularidadMascota, Long> {
 
@@ -18,4 +19,17 @@ public interface TitularidadMascotaRepository extends JpaRepository<TitularidadM
         ORDER BY tm.id
         """)
     List<TitularidadMascota> buscarVigentesPorClienteId(@Param("clienteId") Long clienteId);
+
+    @Query("""
+        SELECT tm
+        FROM TitularidadMascota tm
+        JOIN FETCH tm.mascota
+        WHERE tm.cliente.id = :clienteId
+          AND tm.mascota.id = :mascotaId
+          AND tm.fechaHasta IS NULL
+        """)
+    Optional<TitularidadMascota> buscarVigentePorClienteIdYMascotaId(
+            @Param("clienteId") Long clienteId,
+            @Param("mascotaId") Long mascotaId
+    );
 }

@@ -104,6 +104,13 @@ public class Mascota {
         return fotografiaObjetoKey;
     }
 
+    public void actualizarFotografiaObjetoKey(String nuevaObjetoKey) {
+        this.fotografiaObjetoKey = validarObligatorio(
+                nuevaObjetoKey,
+                "La fotografia objeto key es obligatoria."
+        );
+    }
+
     private static String validarObligatorio(String valor, String mensaje) {
         if (valor == null || valor.isBlank()) {
             throw new IllegalArgumentException(mensaje);

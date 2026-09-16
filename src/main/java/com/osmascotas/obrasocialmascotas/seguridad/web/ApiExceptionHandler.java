@@ -1,5 +1,6 @@
 package com.osmascotas.obrasocialmascotas.seguridad.web;
 
+import com.osmascotas.obrasocialmascotas.storage.AlmacenamientoNoDisponibleException;
 import com.osmascotas.obrasocialmascotas.seguridad.dto.ErrorResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,5 +22,16 @@ public class ApiExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
                 .body(new ErrorResponse("Solicitud JSON invalida"));
+    }
+
+    @ExceptionHandler(AlmacenamientoNoDisponibleException.class)
+    public ResponseEntity<ErrorResponse> manejarAlmacenamientoNoDisponible(
+            AlmacenamientoNoDisponibleException exception
+    ) {
+        LOGGER.warn("Almacenamiento no disponible durante la operacion solicitada.", exception);
+
+        return ResponseEntity
+                .status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(new ErrorResponse("Almacenamiento no disponible"));
     }
 }
