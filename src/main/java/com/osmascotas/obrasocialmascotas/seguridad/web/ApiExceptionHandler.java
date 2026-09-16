@@ -1,5 +1,7 @@
 package com.osmascotas.obrasocialmascotas.seguridad.web;
 
+import com.osmascotas.obrasocialmascotas.clientesmascotas.service.CriteriosBusquedaMascotaInvalidosException;
+import com.osmascotas.obrasocialmascotas.clientesmascotas.service.MascotaNoEncontradaException;
 import com.osmascotas.obrasocialmascotas.storage.AlmacenamientoNoDisponibleException;
 import com.osmascotas.obrasocialmascotas.seguridad.dto.ErrorResponse;
 import org.slf4j.Logger;
@@ -33,5 +35,21 @@ public class ApiExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(new ErrorResponse("Almacenamiento no disponible"));
+    }
+
+    @ExceptionHandler(CriteriosBusquedaMascotaInvalidosException.class)
+    public ResponseEntity<ErrorResponse> manejarCriteriosBusquedaMascotaInvalidos(
+            CriteriosBusquedaMascotaInvalidosException exception
+    ) {
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(new ErrorResponse(exception.getMessage()));
+    }
+
+    @ExceptionHandler(MascotaNoEncontradaException.class)
+    public ResponseEntity<ErrorResponse> manejarMascotaNoEncontrada() {
+        return ResponseEntity
+                .status(HttpStatus.NOT_FOUND)
+                .body(new ErrorResponse("No se encontro la Mascota"));
     }
 }

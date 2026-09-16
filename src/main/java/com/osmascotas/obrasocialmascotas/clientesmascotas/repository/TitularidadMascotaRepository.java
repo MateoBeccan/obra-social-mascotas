@@ -8,7 +8,8 @@ import org.springframework.data.repository.query.Param;
 import java.util.List;
 import java.util.Optional;
 
-public interface TitularidadMascotaRepository extends JpaRepository<TitularidadMascota, Long> {
+public interface TitularidadMascotaRepository
+        extends JpaRepository<TitularidadMascota, Long>, TitularidadMascotaRepositoryCustom {
 
     @Query("""
         SELECT tm
@@ -32,4 +33,14 @@ public interface TitularidadMascotaRepository extends JpaRepository<TitularidadM
             @Param("clienteId") Long clienteId,
             @Param("mascotaId") Long mascotaId
     );
+
+    @Query("""
+        SELECT tm
+        FROM TitularidadMascota tm
+        JOIN FETCH tm.mascota
+        JOIN FETCH tm.cliente
+        WHERE tm.mascota.id = :mascotaId
+          AND tm.fechaHasta IS NULL
+        """)
+    Optional<TitularidadMascota> buscarTitularidadVigentePorMascotaId(@Param("mascotaId") Long mascotaId);
 }
