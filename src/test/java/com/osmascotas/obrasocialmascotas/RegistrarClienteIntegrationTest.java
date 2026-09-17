@@ -298,6 +298,26 @@ class RegistrarClienteIntegrationTest {
         assertThat(registroAuditoriaRepository.count()).isZero();
     }
 
+    @Test
+    void registrarClienteNoLimitaDniAExactamenteOchoDigitos() throws Exception {
+        Usuario administrador = guardarUsuario(ADMIN_IDENTIFICADOR, RolUsuario.ADMINISTRADOR, EstadoUsuario.ACTIVO);
+        Map<String, String> request = clienteRequestValido();
+        request.put("dni", "123456789");
+
+        mockMvc.perform(post("/api/admin/clientes")
+                        .header("Authorization", "Bearer " + tokenValido(administrador))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.dni").value("123456789"));
+
+        assertThat(clienteRepository.count()).isEqualTo(1);
+        assertThat(clienteRepository.findAll().getFirst().getDni()).isEqualTo("123456789");
+        assertThat(registroAuditoriaRepository.findAll())
+                .filteredOn(registro -> "REGISTRAR_CLIENTE".equals(registro.getOperacion()))
+                .hasSize(1);
+    }
+
     @ParameterizedTest
     @CsvSource({"usuarioId", "usuario", "rol", "estado", "password", "mascotaId", "afiliacionId"})
     void registrarClienteConCampoJsonNoPermitidoDevuelveBadRequest(String campoNoPermitido) throws Exception {
