@@ -18,6 +18,14 @@ public interface ClienteRepository extends JpaRepository<Cliente, Long> {
         """)
     boolean existeDni(@Param("dni") String dni);
 
+    @Query("""
+        SELECT COUNT(c) > 0
+        FROM Cliente c
+        WHERE TRIM(c.dni) = TRIM(:dni)
+          AND c.id <> :clienteId
+        """)
+    boolean existeDniEnOtroCliente(@Param("clienteId") Long clienteId, @Param("dni") String dni);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
         SELECT c

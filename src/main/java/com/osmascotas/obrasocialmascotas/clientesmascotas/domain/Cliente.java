@@ -157,6 +157,22 @@ public class Cliente {
         this.domicilio = validarOpcional(domicilio, "El domicilio no puede estar vacio.");
     }
 
+    public void actualizarDatosAdministrativos(
+            String dni,
+            String nombre,
+            String apellido,
+            String correoElectronico,
+            String telefono,
+            String domicilio
+    ) {
+        this.dni = validarObligatorio(dni, "El DNI es obligatorio.");
+        this.nombre = validarObligatorio(nombre, "El nombre es obligatorio.");
+        this.apellido = validarObligatorio(apellido, "El apellido es obligatorio.");
+        this.correoElectronico = validarOpcional(correoElectronico, "El correo electronico no puede estar vacio.");
+        this.telefono = validarOpcional(telefono, "El telefono no puede estar vacio.");
+        this.domicilio = validarOpcional(domicilio, "El domicilio no puede estar vacio.");
+    }
+
     private static String validarObligatorio(String valor, String mensaje) {
         if (valor == null || valor.isBlank()) {
             throw new IllegalArgumentException(mensaje);

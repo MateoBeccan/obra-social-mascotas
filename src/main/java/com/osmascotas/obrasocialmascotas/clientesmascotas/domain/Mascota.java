@@ -111,6 +111,20 @@ public class Mascota {
         );
     }
 
+    public void actualizarDatosAdministrativos(
+            String nombre,
+            String especie,
+            String raza,
+            String sexo,
+            LocalDate fechaNacimiento
+    ) {
+        this.nombre = validarObligatorio(nombre, "El nombre es obligatorio.");
+        this.especie = validarObligatorio(especie, "La especie es obligatoria.");
+        this.raza = validarOpcional(raza, "La raza no puede estar vacia.");
+        this.sexo = validarOpcional(sexo, "El sexo no puede estar vacio.");
+        this.fechaNacimiento = fechaNacimiento;
+    }
+
     private static String validarObligatorio(String valor, String mensaje) {
         if (valor == null || valor.isBlank()) {
             throw new IllegalArgumentException(mensaje);
